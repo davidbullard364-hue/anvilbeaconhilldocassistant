@@ -23,13 +23,26 @@ native_deps:
     <style>
       .anvil-panel-section-container { padding: 0 15px; }
     </style>
+package_name: packages
 runtime_options:
-  client_version: '2'
-  server_spec: {}
+  client_version: '3'
+  server_spec: {base: python312}
   server_version: python3-sandbox
   version: 2
+secrets:
+  OPENAI_API_KEY:
+    type: secret
+    value:
+      BYZ7M2N67NATCKMM: {? '' : 56HjpDb42N73/JMzNacFTAxrrdq9po1Hxk1cTUvCZQ4btAFhK6QSLMLdHGS7V6/bZzQsTvhn/RvUlAIOSVp8AdCYY2NNLQfpZqLttOmNkSaymOtm7wTkqhFOF8HtdrIbOkN842m2G+xkIstUt+2f9UNvI3isebDdCUtJ0GgAs408bhoR1cNt2vWO7jg9XNKpDQT239hZQNk54nG/19mATxUZo6iA90JrlCJCZmAGvgHHbnFxClUPobQrMPulW6wyBloIiHK1iYqUhegTGyn7fFNOnKAwlYluCq0k3NBZQU86ieY0qIsOnCj1mQm4F8uil29xFSTsj3n1CJ4XHemsL7nuTepAKQsYkvU6U7ZZUQGoU4zO6uJX4tseJDqh0yQqVWfoeXPjZy6oSq46W7NxHosV8w==}
+  RAG_ADMIN_PASSWORD:
+    type: secret
+    value:
+      BYZ7M2N67NATCKMM: {? '' : SHT5+z9PiuvcPmQEGrbQU+v/v3xXjtdIwHPd5Fkbte1DFBqckOzFKTDt712091uUV8jRl0MWQucDIov7YteUVP4vPcxh+QkLwXi9dv+cbQE+MdVGwWT15A6OIOtlJPQ+AtAb3lJIUxNKkjlQ+vlQQ78CfKmyRORMHKF1JRL7KWLbFQckhsu5X0wQpkGcmEFBsmI1jBpXXA==}
 services:
 - client_config: {enable_v2: true}
   server_config: {}
   source: /runtime/services/tables.yml
+- client_config: {}
+  server_config: {}
+  source: /runtime/services/anvil/secrets.yml
 startup_form: Form1
