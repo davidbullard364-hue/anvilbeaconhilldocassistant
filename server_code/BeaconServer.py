@@ -61,8 +61,8 @@ def extract_pages(data):
 
     try:
         pdf = PdfReader(BytesIO(data))
-        if pdf.is_encrypted or not 1 <= len(pdf.pages) <= 100:
-            raise ValueError("Use an unlocked PDF with 1 to 100 pages.")
+        if pdf.is_encrypted or not 1 <= len(pdf.pages) <= 200:
+            raise ValueError("Use an unlocked PDF with 1 to 200 pages.")
         pages = [(page.extract_text() or "").strip() for page in pdf.pages]
     except PdfReadError as exc:
         raise ValueError("Could not read the PDF.") from exc
