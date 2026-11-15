@@ -1,3 +1,22 @@
+db_schema:
+  documents:
+    client: none
+    columns:
+    - admin_ui: {order: 0, width: 200}
+      client_hidden: false
+      name: title
+      type: string
+    - admin_ui: {order: 1, width: 200}
+      client_hidden: false
+      name: pages
+      type: simpleObject
+    - admin_ui: {order: 2, width: 200}
+      client_hidden: false
+      name: pdf
+      type: media
+    indexes: []
+    server: full
+    title: documents
 native_deps:
   head_html: |2
 
