@@ -101,6 +101,15 @@ def list_documents():
 
 
 @anvil.server.callable
+def list_library_documents():
+    documents = [
+        {"title": row["title"], "has_pdf": row["pdf"] is not None}
+        for row in app_tables.documents.search()
+    ]
+    return sorted(documents, key=lambda item: item["title"].casefold())
+
+
+@anvil.server.callable
 def get_pdf(title):
     row = app_tables.documents.get(title=title)
     return {"pdf": row["pdf"] if row else None}

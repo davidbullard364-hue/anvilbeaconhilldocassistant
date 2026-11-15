@@ -106,7 +106,15 @@ STYLES = """
   outline: 2px solid var(--bh-green);
   outline-offset: 2px;
 }
-.bh-app .bh-library-title { border-bottom: 1px solid var(--bh-border); padding: .45rem 0; }
+.bh-app .bh-library-entry { border-bottom: 1px solid var(--bh-border); padding: .45rem 0; }
+.bh-app .bh-pdf-preview {
+  display: block;
+  width: 100%;
+  height: min(68vh, 760px);
+  min-height: 260px;
+  border: 1px solid var(--bh-border);
+  border-radius: 8px;
+}
 .bh-app .bh-conversation { min-height: min(340px, 56vh); background: var(--bh-gray); }
 .bh-app .bh-summary-output { background: white; }
 .bh-app .bh-note { color: #5a574e; margin-top: 12px; }
@@ -130,6 +138,8 @@ class Form1(Form1Template):
         self.summary_history = []
         self.summary_title = None
         self.tabs = {}
+        self.pdf_preview = None
+        self.pdf_preview_url = None
 
         document = window.document
         if not document.getElementById("beacon-hill-theme"):
@@ -172,6 +182,7 @@ class Form1(Form1Template):
         node.setAttribute("aria-label", label)
 
     def select_tab(self, name):
+        self.close_pdf_preview()
         for label, button in self.tabs.items():
             classes = get_dom_node(button).classList
             if label == name:
@@ -407,20 +418,79 @@ class Form1(Form1Template):
         listing.add_component(anvil.Label(text="Document Library", bold=True, font_size=24))
         status = anvil.Label(text="Loading documents…")
         listing.add_component(status)
-        titles = self.call_server("list_documents")
+        documents = self.call_server("list_library_documents")
         if listing.parent is not self.panel:
             return
-        if titles is None:
+        if documents is None:
             status.text = "The document list could not be loaded."
             return
-        if not titles:
+        if not documents:
             status.text = "There are no indexed documents yet."
             return
-        status.text = "{} {}".format(len(titles), "document" if len(titles) == 1 else "documents")
-        for title in titles:
-            label = anvil.Label(text=title)
-            listing.add_component(label)
-            self.style(label, "bh-library-title")
+        status.text = "{} {}".format(len(documents), "document" if len(documents) == 1 else "documents")
+        for document in documents:
+            title = document["title"]
+            entry = anvil.ColumnPanel()
+            listing.add_component(entry)
+            self.style(entry, "bh-library-entry")
+            entry.add_component(anvil.Label(text=title, bold=True))
+            if not document["has_pdf"]:
+                entry.add_component(anvil.Label(text="Indexed text only · original PDF unavailable"))
+                continue
+
+            actions = anvil.FlowPanel()
+            entry.add_component(actions)
+            self.button(actions, "View PDF", lambda title=title, entry=entry, **event: self.view_library_pdf(title, entry))
+            self.button(actions, "Download PDF", lambda title=title, **event: self.open_pdf(title))
+
+    def close_pdf_preview(self, **event):
+        if self.pdf_preview is not None:
+            self.pdf_preview.remove_from_parent()
+            self.pdf_preview = None
+        if self.pdf_preview_url is not None:
+            self.pdf_preview_url.revoke()
+            self.pdf_preview_url = None
+
+    def view_library_pdf(self, title, entry):
+        self.close_pdf_preview()
+        preview = anvil.ColumnPanel()
+        entry.add_component(preview)
+        self.pdf_preview = preview
+        self.button(preview, "Close preview", self.close_pdf_preview)
+        status = anvil.Label(text="Loading PDF…")
+        preview.add_component(status)
+
+        result = self.call_server("get_pdf", title)
+        if self.pdf_preview is not preview:
+            return
+        media = result.get("pdf") if result else None
+        if media is None:
+            status.text = "The PDF could not be opened."
+            return
+
+        if media.content_type != "application/pdf":
+            status.text = "Preview unavailable for this attachment. Use Download PDF."
+            return
+
+        try:
+            temporary_url = anvil.media.TempUrl(media, download=False)
+        except Exception as error:
+            print(error)
+            if self.pdf_preview is preview:
+                status.text = "Preview unavailable. Use Download PDF to open the file."
+            return
+        if self.pdf_preview is not preview:
+            temporary_url.revoke()
+            return
+        self.pdf_preview_url = temporary_url
+        status.text = "If the preview does not load, use Download PDF."
+        frame = window.document.createElement("iframe")
+        frame.className = "bh-pdf-preview"
+        frame.title = title
+        frame.src = temporary_url.url
+        mount = anvil.ColumnPanel()
+        preview.add_component(mount)
+        get_dom_node(mount).appendChild(frame)
 
     def owner(self, **event):
         self.select_tab("Owner Tools")
