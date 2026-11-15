@@ -6,6 +6,10 @@ import anvil.server
 
 
 STYLES = """
+.container:has(.bh-app), .anvil-container:has(.bh-app) {
+  width: 100%;
+  max-width: none;
+}
 .bh-app {
   --bh-ink: #252821;
   --bh-green: #3b5042;
@@ -14,12 +18,14 @@ STYLES = """
   --bh-gray: #eeece6;
   color: var(--bh-ink);
   font-family: "DM Sans", system-ui, sans-serif;
-  max-width: 1500px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
   padding: clamp(8px, 2.3vw, 30px);
 }
 .bh-app .bh-hero {
-  padding: clamp(24px, 4vw, 58px);
+  padding: 1.25rem 14px;
   background: linear-gradient(110deg, #fcfaf5, #efe7d4);
   border: 1px solid var(--bh-border);
   border-left: 5px solid #a48159;
@@ -28,12 +34,13 @@ STYLES = """
 }
 .bh-app .bh-hero h1 {
   font-family: "DM Serif Text", Georgia, serif;
-  font-size: clamp(2rem, 4.35vw, 4.5rem);
+  font-size: clamp(2rem, 3.75vw, 3.5rem);
+  font-weight: 700;
   line-height: 1.06;
   color: var(--bh-ink);
-  margin: 0 0 .55em;
+  margin: 0 0 .3em;
 }
-.bh-app .bh-hero p { font-size: 1.05rem; line-height: 1.6; max-width: 65ch; }
+.bh-app .bh-hero p { font-size: clamp(1.2rem, 1.65vw, 1.45rem); line-height: 1.45; max-width: none; margin: 0 0 .35em; }
 .bh-app .bh-nav { border-bottom: 1px solid #77736b; margin: 22px 0 18px; }
 .bh-app .bh-tab button, .bh-app button.bh-tab {
   border-radius: 999px;
@@ -91,8 +98,16 @@ STYLES = """
   border-radius: 12px;
   border: 1px solid var(--bh-border);
   overflow-wrap: anywhere;
+  max-height: min(56vh, 660px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
-.bh-app .bh-conversation { min-height: 340px; background: var(--bh-gray); }
+.bh-app .bh-conversation:focus-visible, .bh-app .bh-summary-output:focus-visible {
+  outline: 2px solid var(--bh-green);
+  outline-offset: 2px;
+}
+.bh-app .bh-library-title { border-bottom: 1px solid var(--bh-border); padding: .45rem 0; }
+.bh-app .bh-conversation { min-height: min(340px, 56vh); background: var(--bh-gray); }
 .bh-app .bh-summary-output { background: white; }
 .bh-app .bh-note { color: #5a574e; margin-top: 12px; }
 @media (max-width: 700px) {
@@ -136,8 +151,9 @@ class Form1(Form1Template):
         self.add_component(nav)
         self.style(nav, "bh-nav")
         for name, handler in [
-            ("Welcome", self.welcome), ("Document Assistant", self.chat),
-            ("Executive Summaries", self.summaries), ("Owner Tools", self.owner),
+            ("Welcome", self.welcome), ("Document Library", self.library),
+            ("Document Assistant", self.chat), ("Executive Summaries", self.summaries),
+            ("Owner Tools", self.owner),
         ]:
             self.tabs[name] = self.button(nav, name, handler, css_class="bh-tab")
 
@@ -147,6 +163,13 @@ class Form1(Form1Template):
 
     def style(self, component, css_class):
         get_dom_node(component).classList.add(css_class)
+
+    def scroll_region(self, component, css_class, label):
+        self.style(component, css_class)
+        node = get_dom_node(component)
+        node.setAttribute("tabindex", "0")
+        node.setAttribute("role", "region")
+        node.setAttribute("aria-label", label)
 
     def select_tab(self, name):
         for label, button in self.tabs.items():
@@ -173,6 +196,8 @@ class Form1(Form1Template):
         guide = anvil.RichText(format="markdown", content=(
             "## Welcome to the Beacon Hill Document Assistant\n\n"
             "Explore community documents and find the sources behind each answer.\n\n"
+            "### Document Library\n\n"
+            "Browse an alphabetical list of all uploaded and indexed documents.\n\n"
             "### Document Assistant\n\n"
             "Ask a question in your own words or choose a starter question. The assistant searches "
             "the full collection. Ask follow-up questions, request a simpler explanation, "
@@ -187,8 +212,9 @@ class Form1(Form1Template):
         self.panel.add_component(note)
         self.style(note, "bh-note")
 
-    def show_answer(self, panel, question, result):
-        panel.add_component(anvil.Label(text=question, bold=True))
+    def show_answer(self, panel, question, result, scroll_pane=None):
+        heading = anvil.Label(text=question, bold=True)
+        panel.add_component(heading)
         panel.add_component(anvil.RichText(format="markdown", content=result["text"]))
         for source in result["sources"]:
             title = source["title"]
@@ -197,6 +223,12 @@ class Form1(Form1Template):
             ))
             link.set_event_handler("click", lambda title=title, **event: self.open_pdf(title))
             panel.add_component(link)
+
+        if scroll_pane is not None:
+            pane = get_dom_node(scroll_pane)
+            heading_top = get_dom_node(heading).getBoundingClientRect().top
+            pane_top = pane.getBoundingClientRect().top
+            pane.scrollTop += heading_top - pane_top - 12
 
     def call_server(self, name, *args):
         try:
@@ -242,7 +274,7 @@ class Form1(Form1Template):
         self.style(question, "bh-input")
         conversation = anvil.ColumnPanel()
         workspace.add_component(conversation)
-        self.style(conversation, "bh-conversation")
+        self.scroll_region(conversation, "bh-conversation", "Document conversation")
         conversation.add_component(anvil.Label(text="Document conversation", bold=True))
         messages = anvil.ColumnPanel()
         conversation.add_component(messages)
@@ -268,7 +300,7 @@ class Form1(Form1Template):
                 return
             self.history.append((prompt, result))
             question.text = ""
-            render()
+            self.show_answer(messages, prompt, result, scroll_pane=conversation)
 
         def reset(**event):
             self.history.clear()
@@ -346,12 +378,16 @@ class Form1(Form1Template):
             self.summary_title = title
             self.summary_history.append((prompt, result))
             question.text = ""
-            render()
+            if followup:
+                self.show_answer(output, prompt, result, scroll_pane=output)
+            else:
+                render()
+                get_dom_node(output).scrollTop = 0
 
         self.button(self.panel, "Generate executive summary", lambda **e: ask_summary(False), primary=True)
         self.panel.add_component(anvil.Label(text="Executive summary", bold=True))
         self.panel.add_component(output)
-        self.style(output, "bh-summary-output")
+        self.scroll_region(output, "bh-summary-output", "Executive summary results")
         self.panel.add_component(question)
         self.style(question, "bh-input")
         followup_button = self.button(self.panel, "Ask follow-up", lambda **e: ask_summary(True))
@@ -362,6 +398,29 @@ class Form1(Form1Template):
 
         selector.set_event_handler("change", change_document)
         render()
+
+    def library(self, **event):
+        self.select_tab("Document Library")
+        listing = anvil.ColumnPanel()
+        self.panel.add_component(listing)
+        self.style(listing, "bh-card")
+        listing.add_component(anvil.Label(text="Document Library", bold=True, font_size=24))
+        status = anvil.Label(text="Loading documents…")
+        listing.add_component(status)
+        titles = self.call_server("list_documents")
+        if listing.parent is not self.panel:
+            return
+        if titles is None:
+            status.text = "The document list could not be loaded."
+            return
+        if not titles:
+            status.text = "There are no indexed documents yet."
+            return
+        status.text = "{} {}".format(len(titles), "document" if len(titles) == 1 else "documents")
+        for title in titles:
+            label = anvil.Label(text=title)
+            listing.add_component(label)
+            self.style(label, "bh-library-title")
 
     def owner(self, **event):
         self.select_tab("Owner Tools")
