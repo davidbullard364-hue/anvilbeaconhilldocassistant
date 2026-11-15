@@ -2,7 +2,7 @@ unique_ids:
   assets: {}
   forms:
     Form1: '1794704371911542976697562.2027'
-  modules:
-    BeaconServer: '1794705575547901758871916.3229'
+  modules: {}
   scripts: {}
-  server_modules: {}
+  server_modules:
+    BeaconServer: '1794708773198115330981104.65868'

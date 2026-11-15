@@ -1,24 +1,17 @@
-import anvil.tables as tables
-import anvil.tables.query as q
-from anvil.tables import app_tables
 import hmac
 import json
 import math
 import re
-import subprocess
 from collections import Counter
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from io import BytesIO
 
 import anvil
 import anvil.secrets
 import anvil.server
 import anvil.tables
 from anvil.tables import app_tables
-import pymupdf
-from openai import OpenAI, OpenAIError
 
-ALL_DOCUMENTS = "All documents"
 LIMIT = 50 * 1024 * 1024
 
 
@@ -27,14 +20,14 @@ def terms(text):
 
 
 def retrieve(question, history, document, documents):
-    selected = [item for item in documents if document == ALL_DOCUMENTS or item["title"] == document]
+    selected = [item for item in documents if document is None or item["title"] == document]
     pages = [
-        {"document": item["title"], "pdf_page": number, "text": text, "pdf_id": item.get("pdf_id")}
+        {"document": item["title"], "pdf_page": number, "text": text}
         for item in selected
         for number, text in enumerate(item["pages"], 1)
         if text.strip()
     ]
-    if document != ALL_DOCUMENTS:
+    if document is not None:
         # A selected document is supplied in full for complete summaries.
         return pages
     # Balance evidence when two document titles are explicitly named.
@@ -60,28 +53,19 @@ def retrieve(question, history, document, documents):
 
 
 def extract_pages(data):
-    pages = []
-    with pymupdf.open(stream=data, filetype="pdf") as pdf:
-        if not pdf.is_pdf or pdf.needs_pass or not 0 < len(pdf) <= 100:
-            raise ValueError("Use an unlocked PDF with 1 to 100 pages.")
-        with TemporaryDirectory() as temp:
-            image = Path(temp) / "page.png"
-            for page in pdf:
-                text = page.get_text().strip()
-                if len(text) < 40 and page.get_images():
-                    scale = min(2.5, 2400 / max(page.rect.width, page.rect.height))
-                    page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).save(image)
-                    ocr = subprocess.run(
-                        ["tesseract", str(image), "stdout", "-l", "eng"],
-                        check=True, timeout=20, capture_output=True, text=True,
-                    ).stdout.strip()
-                    if len(ocr) > len(text):
-                        text = ocr
-                pages.append(text)
-    if not any(pages):
-        raise ValueError("No readable text was found.")
-    return pages
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
 
+    try:
+        pdf = PdfReader(BytesIO(data))
+        if pdf.is_encrypted or not 1 <= len(pdf.pages) <= 100:
+            raise ValueError("Use an unlocked PDF with 1 to 100 pages.")
+        pages = [(page.extract_text() or "").strip() for page in pdf.pages]
+    except PdfReadError as exc:
+        raise ValueError("Could not read the PDF.") from exc
+    if not any(pages):
+        raise ValueError("No searchable text found. Run OCR before uploading.")
+    return pages
 
 
 def require_owner(password):
@@ -98,13 +82,16 @@ def read_documents():
 
 @anvil.server.callable
 def list_documents():
-    return sorted((item["title"] for item in read_documents()), key=str.casefold)
+    print("list_documents: entered", flush=True)
+    titles = [row["title"] for row in app_tables.documents.search()]
+    print(f"list_documents: loaded {len(titles)} titles", flush=True)
+    return sorted(titles, key=str.casefold)
 
 
 @anvil.server.callable
 def get_pdf(title):
     row = app_tables.documents.get(title=title)
-    return row["pdf"] if row else None
+    return {"pdf": row["pdf"] if row else None}
 
 
 @anvil.tables.in_transaction
@@ -139,50 +126,96 @@ def validate_batch(items):
 
 @anvil.server.callable
 def import_index(password, media, replace=False):
-    require_owner(password)
-    if media.length > LIMIT:
-        raise ValueError("Index exceeds 50 MiB.")
-    payload = json.loads(media.get_bytes())
-    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
-        raise ValueError("Choose a Beacon Hill JSON index.")
-    items = [{"title": item.get("title"), "pages": item.get("pages"), "pdf": None} for item in payload]
-    validate_batch(items)
+    try:
+        require_owner(password)
+        if not isinstance(media, anvil.Media):
+            raise ValueError("Choose a JSON index file first.")
+        if media.length > LIMIT:
+            raise ValueError("Index exceeds 50 MiB.")
+        try:
+            payload = json.loads(media.get_bytes())
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError("Choose a valid Beacon Hill JSON index.") from exc
+        if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+            raise ValueError("Choose a Beacon Hill JSON index.")
+        items = [{"title": item.get("title"), "pages": item.get("pages"), "pdf": None} for item in payload]
+        validate_batch(items)
+    except ValueError as exc:
+        return [str(exc)]
     return save_batch(items, replace) or ["The index contained no documents."]
 
 
 @anvil.server.callable
 def upload_pdfs(password, files, replace=False):
-    require_owner(password)
-    if not 1 <= len(files) <= 50 or sum(file.length for file in files) > LIMIT:
-        raise ValueError("Upload 1–50 PDFs totaling at most 50 MiB.")
-    items, failed = [], []
+    try:
+        require_owner(password)
+        if not isinstance(files, list) or not 1 <= len(files) <= 50:
+            raise ValueError("Choose 1 to 50 PDFs.")
+    except ValueError as exc:
+        return [str(exc)]
+
+    results = []
+    seen = set()
     for file in files:
-        name = Path(file.name).name
-        if not name.lower().endswith(".pdf"):
-            failed.append("Skipped non-PDF " + name)
+        if not isinstance(file, anvil.Media):
+            results.append("Skipped an invalid attachment.")
             continue
+        name = Path(file.name or "").name
+        title = Path(name).stem.strip()
+        if not name.lower().endswith(".pdf") or not 1 <= len(title) <= 160:
+            results.append("Skipped invalid PDF filename: " + name)
+            continue
+        if not 0 < file.length <= LIMIT:
+            results.append("Skipped " + name + ": use a nonempty PDF up to 50 MiB.")
+            continue
+        if title.casefold() in seen:
+            results.append("Skipped duplicate title in this upload: " + title)
+            continue
+
+        print("upload_pdfs: reading file bytes", flush=True)
+        data = file.get_bytes()
+        if not 0 < len(data) <= LIMIT:
+            results.append("Skipped " + name + ": use a nonempty PDF up to 50 MiB.")
+            continue
+        print("upload_pdfs: extracting searchable text", flush=True)
         try:
-            data = file.get_bytes()
             pages = extract_pages(data)
-            items.append({
-                "title": Path(name).stem.strip(), "pages": pages,
-                "pdf": anvil.BlobMedia("application/pdf", data, name=name),
-            })
-        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
-            print("PDF extraction failed", type(error).__name__)
-            failed.append("Could not index " + name)
-    validate_batch(items)
-    return save_batch(items, replace) + failed
+        except ValueError as exc:
+            results.append("Could not index " + name + ": " + str(exc))
+            continue
+        except (RuntimeError, OSError, KeyError, TypeError) as exc:
+            print("upload_pdfs: extraction failed", type(exc).__name__, flush=True)
+            results.append("Could not extract text from " + name + ".")
+            continue
+
+        print("upload_pdfs: saving document", flush=True)
+        item = {
+            "title": title,
+            "pages": pages,
+            "pdf": anvil.BlobMedia("application/pdf", data, name=name),
+        }
+        results.extend(save_batch([item], replace))
+        seen.add(title.casefold())
+        del item, data, pages
+    return results
+
+
+@anvil.tables.in_transaction
+def delete_documents():
+    for row in app_tables.documents.search():
+        row.delete()
 
 
 @anvil.server.callable
-@anvil.tables.in_transaction
 def clear_collection(password, confirmation):
-    require_owner(password)
-    if confirmation != "CLEAR":
-        raise ValueError("Type CLEAR to confirm.")
-    for row in app_tables.documents.search():
-        row.delete()
+    try:
+        require_owner(password)
+        if confirmation != "CLEAR":
+            raise ValueError("Type CLEAR to confirm.")
+    except ValueError as exc:
+        return [str(exc)]
+    delete_documents()
+    return ["Collection cleared."]
 
 
 @anvil.server.callable
@@ -197,11 +230,21 @@ def answer(question, history=None, document=None):
         if isinstance(turn, dict) and turn.get("role") in ("user", "assistant")
         and isinstance(turn.get("content"), str)
     ]
+    print("answer: reading document index", flush=True)
     documents = read_documents()
-    pages = retrieve(question, history, document if document is not None else ALL_DOCUMENTS, documents)
+    print(f"answer: loaded {len(documents)} documents", flush=True)
+    pages = retrieve(question, history, document, documents)
     if not pages:
         return {"error": "No supporting passages were found in the selected collection."}
     evidence = [{"source": index, **page} for index, page in enumerate(pages, 1)]
+    print("answer: loading OpenAI SDK", flush=True)
+    try:
+        from openai import OpenAI, OpenAIError
+    except ImportError:
+        print("answer: OpenAI SDK import failed", flush=True)
+        return {"error": "The assistant is temporarily unavailable."}
+
+    print("answer: requesting response", flush=True)
     try:
         with OpenAI(api_key=anvil.secrets.get_secret("OPENAI_API_KEY"), timeout=40, max_retries=0) as client:
             response = client.responses.create(
@@ -216,7 +259,7 @@ def answer(question, history=None, document=None):
     except (OpenAIError, ValueError) as error:
         print("Chat request failed", type(error).__name__, getattr(error, "status_code", None))
         return {"error": "The assistant could not answer right now. Please try again."}
-    text = response.output_text.strip()
+    text = (response.output_text or "").strip()
     if not text:
         return {"error": "The model returned no answer."}
     cited = set(re.findall(r"\[(\d+)\]", text))

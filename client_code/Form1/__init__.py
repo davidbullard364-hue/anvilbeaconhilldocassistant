@@ -1,7 +1,4 @@
 from ._anvil_designer import Form1Template
-import anvil.tables as tables
-import anvil.tables.query as q
-from anvil.tables import app_tables
 import anvil
 import anvil.media
 import anvil.server
@@ -61,8 +58,22 @@ class Form1(Form1Template):
                 source["number"], title, source["page"],
             ), lambda title=title, **event: self.open_pdf(title))
 
+    def call_server(self, name, *args):
+        try:
+            return anvil.server.call(name, *args)
+        except anvil.server.ExecutionTerminatedError as error:
+            print(error)
+            anvil.alert("The server stopped during this request. Check the Anvil App Logs for details.")
+        except Exception as error:
+            print(error)
+            anvil.alert("The request failed. Please try again.")
+        return None
+
     def open_pdf(self, title):
-        media = anvil.server.call("get_pdf", title)
+        result = self.call_server("get_pdf", title)
+        if result is None:
+            return
+        media = result.get("pdf")
         if media:
             anvil.media.download(media)
         else:
@@ -90,7 +101,9 @@ class Form1(Form1Template):
             history = [turn for q, result in self.history[-4:] for turn in (
                 {"role": "user", "content": q}, {"role": "assistant", "content": result["text"]},
             )]
-            result = anvil.server.call("answer", prompt, history)
+            result = self.call_server("answer", prompt, history)
+            if result is None:
+                return
             if "error" in result:
                 anvil.alert(result["error"])
                 return
@@ -119,13 +132,27 @@ class Form1(Form1Template):
 
     def summaries(self, **event):
         self.panel.clear()
-        selector = anvil.DropDown(items=anvil.server.call("list_documents"), placeholder="Choose a document")
+        titles = self.call_server("list_documents")
+        if titles is None:
+            return
+        if not titles:
+            self.panel.add_component(anvil.Label(text="There are no indexed documents yet."))
+            return
+        selector = anvil.DropDown(
+            items=titles, include_placeholder=True, placeholder="Choose a document",
+            selected_value=self.summary_title if self.summary_title in titles else None,
+        )
         self.panel.add_component(selector)
         output = anvil.ColumnPanel(background="#ffffff")
         question = anvil.TextArea(placeholder="Ask a follow-up question about the summarized document")
 
         def render():
             output.clear()
+            ready = selector.selected_value is not None and selector.selected_value == self.summary_title
+            question.enabled = ready
+            followup_button.enabled = ready
+            if not ready:
+                return
             for prompt, result in self.summary_history:
                 self.show_answer(output, prompt, result)
 
@@ -135,10 +162,15 @@ class Form1(Form1Template):
                 anvil.alert("Select a document and generate its summary first.")
                 return
             prompt = (question.text or "") if followup else "Write a plain-language executive summary of " + title
+            if not prompt.strip():
+                anvil.alert("Enter a follow-up question first.")
+                return
             context = [turn for q, result in self.summary_history[-4:] for turn in (
                 {"role": "user", "content": q}, {"role": "assistant", "content": result["text"]},
             )] if followup else []
-            result = anvil.server.call("answer", prompt, context, title)
+            result = self.call_server("answer", prompt, context, title)
+            if result is None:
+                return
             if "error" in result:
                 anvil.alert(result["error"])
                 return
@@ -149,11 +181,16 @@ class Form1(Form1Template):
             question.text = ""
             render()
 
-        selector.selected_value = self.summary_title if self.summary_title in selector.items else None
         self.button(self.panel, "Generate executive summary", lambda **e: ask_summary(False), primary=True)
         self.panel.add_component(output)
         self.panel.add_component(question)
-        self.button(self.panel, "Ask follow-up", lambda **e: ask_summary(True))
+        followup_button = self.button(self.panel, "Ask follow-up", lambda **e: ask_summary(True))
+
+        def change_document(**event):
+            question.text = ""
+            render()
+
+        selector.set_event_handler("change", change_document)
         render()
 
     def owner(self, **event):
@@ -169,17 +206,37 @@ class Form1(Form1Template):
         self.panel.add_component(pdfs)
 
         def run(name, *args):
+            if not password.text:
+                anvil.alert("Enter the owner password first.")
+                return
             try:
-                result = anvil.server.call(name, password.text or "", *args)
-                anvil.alert("\n".join(result) if result else "Collection cleared.")
-            except Exception:
-                anvil.alert("The operation failed. Check the owner password and the Anvil app logs.")
+                result = self.call_server(name, password.text, *args)
+                if result:
+                    anvil.alert("\n".join(result))
             finally:
                 password.text = ""
 
-        self.button(self.panel, "Index PDFs", lambda **e: run("upload_pdfs", pdfs.files, replace.checked))
+        def index_pdfs(**event):
+            if not pdfs.files:
+                anvil.alert("Choose at least one PDF first.")
+                return
+            run("upload_pdfs", pdfs.files, replace.checked)
+
+        def import_json(**event):
+            if index.file is None:
+                anvil.alert("Choose a JSON index file first.")
+                return
+            run("import_index", index.file, replace.checked)
+
+        def clear(**event):
+            if confirmation.text != "CLEAR":
+                anvil.alert("Type CLEAR to confirm.")
+                return
+            run("clear_collection", confirmation.text)
+
+        self.button(self.panel, "Index PDFs", index_pdfs)
         self.panel.add_component(anvil.Label(text="Import a Beacon Hill JSON index"))
         self.panel.add_component(index)
-        self.button(self.panel, "Import index", lambda **e: run("import_index", index.file, replace.checked))
+        self.button(self.panel, "Import index", import_json)
         self.panel.add_component(confirmation)
-        self.button(self.panel, "Clear collection", lambda **e: run("clear_collection", confirmation.text))
+        self.button(self.panel, "Clear collection", clear)
