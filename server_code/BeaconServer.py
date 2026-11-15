@@ -4,7 +4,6 @@ import math
 import re
 from collections import Counter
 from pathlib import Path
-from time import time
 from io import BytesIO
 
 import anvil
@@ -14,9 +13,6 @@ import anvil.tables
 from anvil.tables import app_tables
 
 LIMIT = 50 * 1024 * 1024
-OWNER_SESSION_KEY = "beacon_owner_expires"
-OWNER_SESSION_SECONDS = 15 * 60
-OWNER_UNLOCK_REQUIRED = "Unlock Owner Tools to continue."
 
 
 def terms(text):
@@ -57,8 +53,11 @@ def retrieve(question, history, document, documents):
 
 
 def extract_pages(data):
-    from pypdf import PdfReader
-    from pypdf.errors import PdfReadError
+    try:
+        from pypdf import PdfReader
+        from pypdf.errors import PdfReadError
+    except ImportError as exc:
+        raise ValueError("Install pypdf under Anvil Python Dependencies.") from exc
 
     try:
         pdf = PdfReader(BytesIO(data))
@@ -81,23 +80,10 @@ def password_matches(password):
 
 @anvil.server.callable
 def unlock_owner_tools(password):
-    if not password_matches(password):
-        return False
-    anvil.server.session[OWNER_SESSION_KEY] = time() + OWNER_SESSION_SECONDS
-    return True
-
-
-@anvil.server.callable
-def lock_owner_tools():
-    anvil.server.session.pop(OWNER_SESSION_KEY, None)
-    return True
+    return password_matches(password)
 
 
 def require_owner(password):
-    if password is None:
-        if anvil.server.session.get(OWNER_SESSION_KEY, 0) > time():
-            return
-        raise ValueError(OWNER_UNLOCK_REQUIRED)
     if not password_matches(password):
         raise ValueError("Owner authentication failed.")
 
@@ -173,6 +159,7 @@ def import_index(password, media, replace=False):
 
 @anvil.server.callable
 def upload_pdfs(password, files, replace=False):
+    print("upload_pdfs: request entered", flush=True)
     try:
         require_owner(password)
         if not isinstance(files, list) or not 1 <= len(files) <= 50:
@@ -180,6 +167,7 @@ def upload_pdfs(password, files, replace=False):
     except ValueError as exc:
         return [str(exc)]
 
+    print("upload_pdfs: checking attachment metadata", flush=True)
     results = []
     seen = set()
     for file in files:
@@ -198,31 +186,28 @@ def upload_pdfs(password, files, replace=False):
             results.append("Skipped duplicate title in this upload: " + title)
             continue
 
-        print("upload_pdfs: reading file bytes", flush=True)
-        data = file.get_bytes()
-        if not 0 < len(data) <= LIMIT:
-            results.append("Skipped " + name + ": use a nonempty PDF up to 50 MiB.")
-            continue
-        print("upload_pdfs: extracting searchable text", flush=True)
+        stage = "reading attachment"
         try:
+            print("upload_pdfs: reading attachment", flush=True)
+            data = file.get_bytes()
+            if not 0 < len(data) <= LIMIT:
+                raise ValueError("Use a nonempty PDF up to 50 MiB.")
+            stage = "extracting text"
+            print("upload_pdfs: extracting text", flush=True)
             pages = extract_pages(data)
-        except ValueError as exc:
-            results.append("Could not index " + name + ": " + str(exc))
-            continue
-        except (RuntimeError, OSError, KeyError, TypeError) as exc:
-            print("upload_pdfs: extraction failed", type(exc).__name__, flush=True)
-            results.append("Could not extract text from " + name + ".")
+            del data
+
+            stage = "saving to the documents table"
+            print("upload_pdfs: saving text and original attachment", flush=True)
+            results.extend(save_batch([{"title": title, "pages": pages, "pdf": file}], replace))
+            print("upload_pdfs: Data Table write finished", flush=True)
+        except Exception as exc:
+            print("upload_pdfs: failed while", stage, type(exc).__name__, flush=True)
+            detail = str(exc) if stage != "saving to the documents table" and isinstance(exc, ValueError) else "Check Anvil App Logs."
+            results.append("Could not index {} while {}. {}".format(name, stage, detail))
             continue
 
-        print("upload_pdfs: saving document", flush=True)
-        item = {
-            "title": title,
-            "pages": pages,
-            "pdf": anvil.BlobMedia("application/pdf", data, name=name),
-        }
-        results.extend(save_batch([item], replace))
         seen.add(title.casefold())
-        del item, data, pages
     return results
 
 

@@ -1,62 +1,202 @@
 from ._anvil_designer import Form1Template
 import anvil
+from anvil.js import get_dom_node, window
 import anvil.media
 import anvil.server
+
+
+STYLES = """
+.bh-app {
+  --bh-ink: #252821;
+  --bh-green: #3b5042;
+  --bh-border: #ddd5c4;
+  --bh-paper: #fcfaf5;
+  --bh-gray: #eeece6;
+  color: var(--bh-ink);
+  font-family: "DM Sans", system-ui, sans-serif;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: clamp(8px, 2.3vw, 30px);
+}
+.bh-app .bh-hero {
+  padding: clamp(24px, 4vw, 58px);
+  background: linear-gradient(110deg, #fcfaf5, #efe7d4);
+  border: 1px solid var(--bh-border);
+  border-left: 5px solid #a48159;
+  border-radius: 24px;
+  box-shadow: 0 12px 32px #342d1910;
+}
+.bh-app .bh-hero h1 {
+  font-family: "DM Serif Text", Georgia, serif;
+  font-size: clamp(2rem, 4.35vw, 4.5rem);
+  line-height: 1.06;
+  color: var(--bh-ink);
+  margin: 0 0 .55em;
+}
+.bh-app .bh-hero p { font-size: 1.05rem; line-height: 1.6; max-width: 65ch; }
+.bh-app .bh-nav { border-bottom: 1px solid #77736b; margin: 22px 0 18px; }
+.bh-app .bh-tab button, .bh-app button.bh-tab {
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--bh-ink);
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: normal;
+  padding: .55rem 1rem;
+}
+.bh-app .bh-tab-active button, .bh-app button.bh-tab-active {
+  background: var(--bh-green);
+  color: white;
+}
+.bh-app .bh-card, .bh-app .bh-sidebar {
+  padding: clamp(14px, 2vw, 25px);
+  background: var(--bh-paper);
+  border: 1px solid var(--bh-border);
+  border-radius: 20px;
+}
+.bh-app .bh-card { box-shadow: 0 10px 30px #342d190c; line-height: 1.65; }
+.bh-app .bh-card h2 { margin-top: 0; }
+.bh-app .bh-sidebar { padding: 14px; }
+.bh-app .bh-sidebar-title { color: var(--bh-green); }
+.bh-app .bh-prompt button, .bh-app button.bh-prompt {
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  background: var(--bh-gray);
+  color: var(--bh-ink);
+  border: 0;
+  border-radius: 9px;
+  padding: .55rem .7rem;
+}
+.bh-app .bh-ask button, .bh-app button.bh-ask {
+  background: var(--bh-green);
+  color: white;
+  border-radius: 9px;
+  text-transform: none;
+  width: 100%;
+}
+.bh-app .bh-input textarea, .bh-app textarea.bh-input {
+  background: var(--bh-gray);
+  color: var(--bh-ink);
+  border: 1px solid #bab5a9;
+  border-radius: 9px;
+  min-height: 78px;
+  padding: .75rem;
+}
+.bh-app .bh-conversation, .bh-app .bh-summary-output {
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--bh-border);
+  overflow-wrap: anywhere;
+}
+.bh-app .bh-conversation { min-height: 340px; background: var(--bh-gray); }
+.bh-app .bh-summary-output { background: white; }
+.bh-app .bh-note { color: #5a574e; margin-top: 12px; }
+@media (max-width: 700px) {
+  .bh-app .bh-chat-layout [class*="col-xs-"] {
+    width: 100%;
+    margin-left: 0;
+  }
+  .bh-app .bh-sidebar { margin-top: 12px; }
+}
+"""
 
 
 class Form1(Form1Template):
     def __init__(self, **properties):
         self.init_components(**properties)
         self.clear()
-        self.background = "#faf6ed"
+        self.background = "#ffffff"
         self.history = []
         self.last_question = None
         self.summary_history = []
         self.summary_title = None
+        self.tabs = {}
 
-        self.add_component(anvil.Label(
-            text="Beacon Hill Document Assistant", font_size=30,
-            bold=True, foreground="#355344",
+        document = window.document
+        if not document.getElementById("beacon-hill-theme"):
+            style = document.createElement("style")
+            style.id = "beacon-hill-theme"
+            style.textContent = STYLES
+            document.head.appendChild(style)
+        self.style(self, "bh-app")
+
+        hero = anvil.RichText(format="markdown", content=(
+            "# Beacon Hill Document Assistant\n\n"
+            "Ask questions about community documents and get executive summaries with sources.\n\n"
+            "**Community resource maintained by a resident.** "
+            "Check cited documents when making decisions."
         ))
-        self.add_component(anvil.Label(text="A resident-maintained resource for community documents."))
+        self.add_component(hero)
+        self.style(hero, "bh-hero")
         nav = anvil.FlowPanel()
         self.add_component(nav)
+        self.style(nav, "bh-nav")
         for name, handler in [
             ("Welcome", self.welcome), ("Document Assistant", self.chat),
-            ("Executive Summaries", self.summaries), ("Owner tools", self.owner),
+            ("Executive Summaries", self.summaries), ("Owner Tools", self.owner),
         ]:
-            self.button(nav, name, handler)
+            self.tabs[name] = self.button(nav, name, handler, css_class="bh-tab")
 
-        self.panel = anvil.ColumnPanel(background="#fffdf8")
+        self.panel = anvil.ColumnPanel()
         self.add_component(self.panel)
         self.welcome()
 
-    def button(self, panel, title, handler, primary=False):
+    def style(self, component, css_class):
+        get_dom_node(component).classList.add(css_class)
+
+    def select_tab(self, name):
+        for label, button in self.tabs.items():
+            classes = get_dom_node(button).classList
+            if label == name:
+                classes.add("bh-tab-active")
+            else:
+                classes.remove("bh-tab-active")
+        self.panel.clear()
+
+    def button(self, panel, title, handler, primary=False, css_class=None):
         button = anvil.Button(text=title)
-        button.background = "#355344" if primary else "#efede8"
-        button.foreground = "#ffffff" if primary else "#292b24"
+        if css_class is None:
+            button.background = "#3b5042" if primary else "#eeece6"
+            button.foreground = "#ffffff" if primary else "#252821"
         button.set_event_handler("click", handler)
         panel.add_component(button)
+        if css_class:
+            self.style(button, css_class)
         return button
 
     def welcome(self, **event):
-        self.panel.clear()
-        self.panel.add_component(anvil.RichText(format="markdown", content=(
-            "## Welcome\n\n"
-            "**Document Assistant** searches the community collection and answers questions with "
-            "document and page citations. Try a starter question or ask one of your own.\n\n"
-            "**Executive Summaries** gives you a plain-language overview of a selected document. "
-            "Ask follow-up questions about the same document after reading its summary."
-        )))
+        self.select_tab("Welcome")
+        guide = anvil.RichText(format="markdown", content=(
+            "## Welcome to the Beacon Hill Document Assistant\n\n"
+            "Explore community documents and find the sources behind each answer.\n\n"
+            "### Document Assistant\n\n"
+            "Ask a question in your own words or choose a starter question. The assistant searches "
+            "the full collection. Ask follow-up questions, request a simpler explanation, "
+            "or ask to see the supporting wording. Use the citations to check the source.\n\n"
+            "### Executive Summaries\n\n"
+            "Choose a document and select **Generate executive summary** for a plain-language "
+            "overview with citations. Use the follow-up field to ask about that document."
+        ))
+        self.panel.add_component(guide)
+        self.style(guide, "bh-card")
+        note = anvil.Label(text="Answers are generated from the current collection. Interpretations may require further review.")
+        self.panel.add_component(note)
+        self.style(note, "bh-note")
 
     def show_answer(self, panel, question, result):
         panel.add_component(anvil.Label(text=question, bold=True))
         panel.add_component(anvil.RichText(format="markdown", content=result["text"]))
         for source in result["sources"]:
             title = source["title"]
-            self.button(panel, "[{}] {} · PDF page {}".format(
+            link = anvil.Link(text="[{}] {} · PDF page {}".format(
                 source["number"], title, source["page"],
-            ), lambda title=title, **event: self.open_pdf(title))
+            ))
+            link.set_event_handler("click", lambda title=title, **event: self.open_pdf(title))
+            panel.add_component(link)
 
     def call_server(self, name, *args):
         try:
@@ -80,18 +220,37 @@ class Form1(Form1Template):
             anvil.alert("The original PDF is unavailable. This document was imported as indexed text.")
 
     def chat(self, **event):
-        self.panel.clear()
-        question = anvil.TextArea(placeholder="Ask about Beacon Hill documents")
-        self.panel.add_component(question)
-        controls = anvil.FlowPanel()
-        self.panel.add_component(controls)
+        self.select_tab("Document Assistant")
+        layout = anvil.GridPanel()
+        self.panel.add_component(layout)
+        self.style(layout, "bh-chat-layout")
+        controls = anvil.ColumnPanel()
+        workspace = anvil.ColumnPanel()
+        layout.add_component(controls, row="chat", col_xs=0, width_xs=3)
+        layout.add_component(workspace, row="chat", col_xs=3, width_xs=9)
+        self.style(controls, "bh-sidebar")
+
+        composer = anvil.GridPanel()
+        workspace.add_component(composer)
+        fields = anvil.ColumnPanel()
+        actions = anvil.ColumnPanel()
+        composer.add_component(fields, row="question", col_xs=0, width_xs=10)
+        composer.add_component(actions, row="question", col_xs=10, width_xs=2)
+        fields.add_component(anvil.Label(text="Your question", bold=True))
+        question = anvil.TextArea(placeholder="What would you like to understand?")
+        fields.add_component(question)
+        self.style(question, "bh-input")
         conversation = anvil.ColumnPanel()
-        self.panel.add_component(conversation)
+        workspace.add_component(conversation)
+        self.style(conversation, "bh-conversation")
+        conversation.add_component(anvil.Label(text="Document conversation", bold=True))
+        messages = anvil.ColumnPanel()
+        conversation.add_component(messages)
 
         def render():
-            conversation.clear()
+            messages.clear()
             for prompt, result in self.history:
-                self.show_answer(conversation, prompt, result)
+                self.show_answer(messages, prompt, result)
 
         def ask(prompt):
             if not prompt.strip():
@@ -116,22 +275,30 @@ class Form1(Form1Template):
             self.last_question = None
             render()
 
-        self.button(controls, "Ask", lambda **e: ask(question.text or ""), primary=True)
-        self.button(controls, "Retry last question", lambda **e: ask(self.last_question or ""))
-        self.button(controls, "New conversation", reset)
-        starters = anvil.FlowPanel()
-        self.panel.add_component(starters, index=2)
+        self.button(actions, "Ask", lambda **e: ask(question.text or ""), css_class="bh-ask")
+        heading = anvil.Label(text="Try a question", bold=True)
+        controls.add_component(heading)
+        self.style(heading, "bh-sidebar-title")
         for prompt in (
             "How do I file a complaint?", "Summarize the bylaws",
             "What records does the association retain?", "Explain the conflict-of-interest policy",
         ):
-            self.button(starters, prompt, lambda prompt=prompt, **e: ask(prompt))
-        for prompt in ("Explain the previous answer more simply.", "Show the supporting wording."):
-            self.button(starters, prompt, lambda prompt=prompt, **e: ask(prompt))
+            self.button(controls, prompt, lambda prompt=prompt, **e: ask(prompt), css_class="bh-prompt")
+
+        heading = anvil.Label(text="Answer prompts", bold=True)
+        controls.add_component(heading)
+        self.style(heading, "bh-sidebar-title")
+        for label, prompt in (
+            ("Explain more simply", "Explain the previous answer more simply."),
+            ("Show supporting wording", "Show the supporting wording."),
+        ):
+            self.button(controls, label, lambda prompt=prompt, **e: ask(prompt), css_class="bh-prompt")
+        self.button(controls, "Retry last question", lambda **e: ask(self.last_question or ""), css_class="bh-prompt")
+        self.button(controls, "New conversation", reset, css_class="bh-prompt")
         render()
 
     def summaries(self, **event):
-        self.panel.clear()
+        self.select_tab("Executive Summaries")
         titles = self.call_server("list_documents")
         if titles is None:
             return
@@ -182,8 +349,11 @@ class Form1(Form1Template):
             render()
 
         self.button(self.panel, "Generate executive summary", lambda **e: ask_summary(False), primary=True)
+        self.panel.add_component(anvil.Label(text="Executive summary", bold=True))
         self.panel.add_component(output)
+        self.style(output, "bh-summary-output")
         self.panel.add_component(question)
+        self.style(question, "bh-input")
         followup_button = self.button(self.panel, "Ask follow-up", lambda **e: ask_summary(True))
 
         def change_document(**event):
@@ -194,56 +364,96 @@ class Form1(Form1Template):
         render()
 
     def owner(self, **event):
-        self.panel.clear()
+        self.select_tab("Owner Tools")
         owner_panel = anvil.ColumnPanel()
         self.panel.add_component(owner_panel)
         password = anvil.TextBox(hide_text=True, placeholder="Owner password")
         owner_panel.add_component(password)
 
         def unlock(**event):
-            if not password.text:
+            if not unlock_button.enabled:
+                return
+            candidate = password.text
+            if not candidate:
                 anvil.alert("Enter the owner password first.")
                 return
             unlock_button.enabled = False
             try:
-                accepted = self.call_server("unlock_owner_tools", password.text)
+                accepted = self.call_server("unlock_owner_tools", candidate)
             finally:
                 password.text = ""
                 unlock_button.enabled = True
             if owner_panel.parent is not self.panel:
                 return
             if accepted is True:
-                self.show_owner_tools(owner_panel)
+                self.show_owner_tools(owner_panel, candidate)
             elif accepted is False:
                 anvil.alert("Incorrect owner password.")
 
         unlock_button = self.button(owner_panel, "Unlock Owner Tools", unlock, primary=True)
         password.set_event_handler("pressed_enter", unlock)
 
-    def show_owner_tools(self, panel):
+    def show_owner_tools(self, panel, owner_password):
         panel.clear()
         replace = anvil.CheckBox(text="Replace matching titles")
-        pdfs = anvil.FileLoader(file_types=".pdf", multiple=True)
+        pdfs = anvil.FileLoader(file_types=".pdf", multiple=True, show_state=True, text="Choose PDFs")
         index = anvil.FileLoader(file_types=".json")
         confirmation = anvil.TextBox(placeholder="Type CLEAR to confirm")
 
         def lock(**event):
-            if self.call_server("lock_owner_tools") is True and panel.parent is self.panel:
-                self.owner()
+            nonlocal owner_password
+            owner_password = ""
+            self.owner()
 
         def run(name, *args):
-            result = self.call_server(name, None, *args)
+            result = self.call_server(name, owner_password, *args)
             if not result or panel.parent is not self.panel:
                 return
-            if result == ["Unlock Owner Tools to continue."]:
-                self.owner()
+            if result == ["Owner authentication failed."]:
+                lock()
             anvil.alert("\n".join(result))
 
         def index_pdfs(**event):
-            if not pdfs.files:
+            files = list(pdfs.files or [])
+            if not files:
                 anvil.alert("Choose at least one PDF first.")
                 return
-            run("upload_pdfs", pdfs.files, replace.checked)
+            if len(files) > 50:
+                anvil.alert("Choose up to 50 PDFs at a time.")
+                return
+            replace_titles = replace.checked
+            for control in upload_controls:
+                control.enabled = False
+            messages = []
+            seen_titles = set()
+            try:
+                for position, file in enumerate(files, 1):
+                    if panel.parent is not self.panel:
+                        return
+                    name = file.name or "Unnamed PDF"
+                    title = name[:-4].strip().lower() if name.lower().endswith(".pdf") else None
+                    if title and title in seen_titles:
+                        messages.append("Skipped duplicate title in this selection: " + name)
+                        continue
+                    upload_status.text = "Indexing {}/{}: {}".format(position, len(files), name)
+                    result = self.call_server("upload_pdfs", owner_password, [file], replace_titles)
+                    if result is None:
+                        messages.append("Stopped at " + name + ". Check the collection before retrying this file.")
+                        break
+                    messages.extend(result)
+                    if result == ["Owner authentication failed."]:
+                        if panel.parent is self.panel:
+                            lock()
+                            anvil.alert(result[0])
+                        return
+                    if title and result and result[0].startswith(("Added ", "Replaced ", "Skipped existing title ")):
+                        seen_titles.add(title)
+            finally:
+                upload_status.text = ""
+                for control in upload_controls:
+                    control.enabled = True
+            if messages and panel.parent is self.panel:
+                anvil.alert("\n".join(messages))
 
         def import_json(**event):
             if index.file is None:
@@ -257,13 +467,16 @@ class Form1(Form1Template):
                 return
             run("clear_collection", confirmation.text)
 
-        self.button(panel, "Lock Owner Tools", lock)
+        lock_button = self.button(panel, "Lock Owner Tools", lock)
         panel.add_component(replace)
         panel.add_component(anvil.Label(text="Upload PDF files"))
         panel.add_component(pdfs)
-        self.button(panel, "Index PDFs", index_pdfs)
+        index_button = self.button(panel, "Index PDFs", index_pdfs)
+        upload_status = anvil.Label(text="")
+        panel.add_component(upload_status)
         panel.add_component(anvil.Label(text="Import a Beacon Hill JSON index"))
         panel.add_component(index)
-        self.button(panel, "Import index", import_json)
+        import_button = self.button(panel, "Import index", import_json)
         panel.add_component(confirmation)
-        self.button(panel, "Clear collection", clear)
+        clear_button = self.button(panel, "Clear collection", clear)
+        upload_controls = (lock_button, index_button, import_button, clear_button, pdfs, replace)
