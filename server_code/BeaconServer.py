@@ -4,6 +4,7 @@ import math
 import re
 from collections import Counter
 from pathlib import Path
+from time import time
 from io import BytesIO
 
 import anvil
@@ -13,6 +14,9 @@ import anvil.tables
 from anvil.tables import app_tables
 
 LIMIT = 50 * 1024 * 1024
+OWNER_SESSION_KEY = "beacon_owner_expires"
+OWNER_SESSION_SECONDS = 15 * 60
+OWNER_UNLOCK_REQUIRED = "Unlock Owner Tools to continue."
 
 
 def terms(text):
@@ -68,11 +72,33 @@ def extract_pages(data):
     return pages
 
 
-def require_owner(password):
+def password_matches(password):
+    if not isinstance(password, str) or not password:
+        return False
     expected = anvil.secrets.get_secret("RAG_ADMIN_PASSWORD")
-    if not expected or not isinstance(password, str) or not hmac.compare_digest(
-        expected.encode(), password.encode()
-    ):
+    return bool(expected) and hmac.compare_digest(expected.encode(), password.encode())
+
+
+@anvil.server.callable
+def unlock_owner_tools(password):
+    if not password_matches(password):
+        return False
+    anvil.server.session[OWNER_SESSION_KEY] = time() + OWNER_SESSION_SECONDS
+    return True
+
+
+@anvil.server.callable
+def lock_owner_tools():
+    anvil.server.session.pop(OWNER_SESSION_KEY, None)
+    return True
+
+
+def require_owner(password):
+    if password is None:
+        if anvil.server.session.get(OWNER_SESSION_KEY, 0) > time():
+            return
+        raise ValueError(OWNER_UNLOCK_REQUIRED)
+    if not password_matches(password):
         raise ValueError("Owner authentication failed.")
 
 

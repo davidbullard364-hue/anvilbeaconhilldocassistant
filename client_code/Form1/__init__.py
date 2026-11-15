@@ -195,26 +195,49 @@ class Form1(Form1Template):
 
     def owner(self, **event):
         self.panel.clear()
+        owner_panel = anvil.ColumnPanel()
+        self.panel.add_component(owner_panel)
         password = anvil.TextBox(hide_text=True, placeholder="Owner password")
+        owner_panel.add_component(password)
+
+        def unlock(**event):
+            if not password.text:
+                anvil.alert("Enter the owner password first.")
+                return
+            unlock_button.enabled = False
+            try:
+                accepted = self.call_server("unlock_owner_tools", password.text)
+            finally:
+                password.text = ""
+                unlock_button.enabled = True
+            if owner_panel.parent is not self.panel:
+                return
+            if accepted is True:
+                self.show_owner_tools(owner_panel)
+            elif accepted is False:
+                anvil.alert("Incorrect owner password.")
+
+        unlock_button = self.button(owner_panel, "Unlock Owner Tools", unlock, primary=True)
+        password.set_event_handler("pressed_enter", unlock)
+
+    def show_owner_tools(self, panel):
+        panel.clear()
         replace = anvil.CheckBox(text="Replace matching titles")
         pdfs = anvil.FileLoader(file_types=".pdf", multiple=True)
         index = anvil.FileLoader(file_types=".json")
         confirmation = anvil.TextBox(placeholder="Type CLEAR to confirm")
-        self.panel.add_component(password)
-        self.panel.add_component(replace)
-        self.panel.add_component(anvil.Label(text="Upload PDF files"))
-        self.panel.add_component(pdfs)
+
+        def lock(**event):
+            if self.call_server("lock_owner_tools") is True and panel.parent is self.panel:
+                self.owner()
 
         def run(name, *args):
-            if not password.text:
-                anvil.alert("Enter the owner password first.")
+            result = self.call_server(name, None, *args)
+            if not result or panel.parent is not self.panel:
                 return
-            try:
-                result = self.call_server(name, password.text, *args)
-                if result:
-                    anvil.alert("\n".join(result))
-            finally:
-                password.text = ""
+            if result == ["Unlock Owner Tools to continue."]:
+                self.owner()
+            anvil.alert("\n".join(result))
 
         def index_pdfs(**event):
             if not pdfs.files:
@@ -234,9 +257,13 @@ class Form1(Form1Template):
                 return
             run("clear_collection", confirmation.text)
 
-        self.button(self.panel, "Index PDFs", index_pdfs)
-        self.panel.add_component(anvil.Label(text="Import a Beacon Hill JSON index"))
-        self.panel.add_component(index)
-        self.button(self.panel, "Import index", import_json)
-        self.panel.add_component(confirmation)
-        self.button(self.panel, "Clear collection", clear)
+        self.button(panel, "Lock Owner Tools", lock)
+        panel.add_component(replace)
+        panel.add_component(anvil.Label(text="Upload PDF files"))
+        panel.add_component(pdfs)
+        self.button(panel, "Index PDFs", index_pdfs)
+        panel.add_component(anvil.Label(text="Import a Beacon Hill JSON index"))
+        panel.add_component(index)
+        self.button(panel, "Import index", import_json)
+        panel.add_component(confirmation)
+        self.button(panel, "Clear collection", clear)
